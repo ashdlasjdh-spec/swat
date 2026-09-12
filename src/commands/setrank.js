@@ -1,13 +1,12 @@
 const { success, error, info } = require('../utils/embed');
 const { humanize } = require('../utils/errors');
-const roblox = require('../roblox');
 
 module.exports = {
   name: 'setrank',
   aliases: ['rank', 'sr'],
   description: 'Set a user\'s rank by rank name or rank number.',
   usage: 'setrank <username|userId> <rankName|rankNumber>',
-  async execute(message, args) {
+  async execute(message, args, { roblox, group }) {
     // No rank provided -> show every registered rank (pulled from the API).
     if (args.length < 2) {
       const roles = roblox.getRoles();
@@ -15,7 +14,7 @@ module.exports = {
         ? roles.map((r) => `\`${String(r.rank).padStart(3)}\` — ${r.name}`).join('\n')
         : '_No ranks cached yet._';
       return message.reply({
-        embeds: [info('Usage', `\`${this.usage}\`\n\n**Registered ranks:**\n${list}`)],
+        embeds: [info(`Ranks — ${group.name}`, `\`${this.usage}\`\n\n**Registered ranks:**\n${list}`)],
       });
     }
 
@@ -35,11 +34,11 @@ module.exports = {
 
       const note = changed ? '' : ' _(already at that rank)_';
       return message.reply({
-        embeds: [success('Rank Updated', `Set **${target}** (\`${userId}\`) to **${role.name}** (rank \`${role.rank}\`).${note}`)],
+        embeds: [success('Rank Updated', `Set **${target}** (\`${userId}\`) to **${role.name}** (rank \`${role.rank}\`) in **${group.name}**.${note}`)],
       });
     } catch (err) {
       if (err.message === 'NOT_A_MEMBER') {
-        return message.reply({ embeds: [error('Not a member', `**${target}** is not in the group.`)] });
+        return message.reply({ embeds: [error('Not a member', `**${target}** is not in **${group.name}**.`)] });
       }
       return message.reply({ embeds: [error('Failed to set rank', humanize(err))] });
     }

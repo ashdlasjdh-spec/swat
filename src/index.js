@@ -32,19 +32,26 @@ for (const file of fs.readdirSync(commandsPath).filter((f) => f.endsWith('.js'))
 const cooldowns = new Map();
 const COOLDOWN_MS = 1500;
 
+// Prefix -> group routes, populated after roblox.init(), longest prefix first.
+let routes = [];
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 client.once('clientReady', () => {
   console.log(`[discord] Logged in as ${client.user.tag}`);
-  client.user.setActivity(`${config.prefix}help • Get swatted.gg`);
+  const help = routes.map((r) => `${r.prefix}help`).join(' / ');
+  client.user.setActivity(`${help} • ${routes.length} group(s)`);
 });
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
-  if (!message.content.startsWith(config.prefix)) return;
 
-  const args = message.content.slice(config.prefix.length).trim().split(/\s+/);
+  // Pick the group whose prefix this message starts with.
+  const route = routes.find((r) => message.content.startsWith(r.prefix));
+  if (!route) return;
+
+  const args = message.content.slice(route.prefix.length).trim().split(/\s+/);
   const name = (args.shift() || '').toLowerCase();
   const command = client.commands.get(name);
   if (!command) return;
@@ -58,7 +65,13 @@ client.on('messageCreate', async (message) => {
   cooldowns.set(message.author.id, Date.now());
 
   try {
-    await command.execute(message, args, { roblox, config, client });
+    await command.execute(message, args, {
+      roblox: route.group, // the Group this prefix targets
+      group: route.group,
+      prefix: route.prefix,
+      config,
+      client,
+    });
   } catch (err) {
     console.error(`[command:${name}]`, err);
     message
@@ -72,20 +85,24 @@ client.on('messageCreate', async (message) => {
 // ---------------------------------------------------------------------------
 (async () => {
   try {
-    const info = await roblox.init();
-    console.log(`[roblox] Open Cloud authenticated for group "${info.group}" (${config.groupId})`);
-    console.log(`[roblox] Registered ${roblox.getRoles().length} ranks`);
-    console.log(`[roblox] Cookie ops: ${info.cookie}`);
+    const { groups, cookie } = await roblox.init();
+    routes = [...groups.entries()]
+      .map(([prefix, group]) => ({ prefix, group }))
+      .sort((a, b) => b.prefix.length - a.prefix.length); // longest prefix wins
+    for (const { prefix, group } of routes) {
+      console.log(`[roblox] "${prefix}" -> ${group.name} (${group.groupId}) — ${group.getRoles().length} ranks`);
+    }
+    console.log(`[roblox] Cookie ops: ${cookie}`);
   } catch (err) {
-    console.error('[roblox] Open Cloud auth failed — check ROBLOX_API_KEY / GROUP_ID and the key\'s group permissions.');
+    console.error('[roblox] Open Cloud auth failed — check ROBLOX_API_KEY and that the key is scoped to EVERY group.');
     console.error(err.response?.data ? JSON.stringify(err.response.data) : err.message);
     process.exit(1);
   }
 
   await client.login(config.discordToken);
 
-  // Keep the rank cache in sync with the group.
-  setInterval(() => roblox.refreshRoles().catch(() => {}), config.roleRefreshInterval);
+  // Keep every group's rank cache in sync.
+  setInterval(() => roblox.refreshAllRoles(), config.roleRefreshInterval);
 
   // Drop stale cooldown entries so the map can't grow without bound.
   setInterval(() => {

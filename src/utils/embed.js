@@ -12,7 +12,7 @@ function build(color, title, description) {
     .setColor(color)
     .setTitle(title)
     .setDescription(description ?? null)
-    .setFooter({ text: 'Get swatted.gg • Group Management' })
+    .setFooter({ text: 'Roblox Group Management' })
     .setTimestamp();
 }
 

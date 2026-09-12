@@ -9,15 +9,45 @@ function required(name) {
   return value;
 }
 
+// Build the list of managed groups. Each group has its own command prefix,
+// so one bot in one server can manage several groups:
+//   "."  -> 981953580 (Get swatted.gg)
+//   ","  -> 807480487 (swatk raider tag)
+// Override with GROUPS="<prefix>:<groupId>,<prefix>:<groupId>", or with the
+// individual PREFIX/GROUP_ID and PREFIX2/GROUP2_ID vars.
+function buildGroups() {
+  const out = [];
+  const raw = (process.env.GROUPS || '').trim();
+  if (raw) {
+    for (const part of raw.split(',')) {
+      const [prefix, gid] = part.split(':').map((s) => s.trim());
+      const groupId = parseInt(gid, 10);
+      if (prefix && Number.isFinite(groupId) && groupId > 0) out.push({ prefix, groupId });
+    }
+  } else {
+    out.push({ prefix: process.env.PREFIX || '.', groupId: parseInt(process.env.GROUP_ID || '981953580', 10) });
+    const g2 = parseInt(process.env.GROUP2_ID || '807480487', 10);
+    if (Number.isFinite(g2) && g2 > 0) out.push({ prefix: process.env.PREFIX2 || ',', groupId: g2 });
+  }
+  // First prefix wins if duplicated; longest prefixes matched first at dispatch.
+  const seen = new Set();
+  return out.filter((g) => (seen.has(g.prefix) ? false : (seen.add(g.prefix), true)));
+}
+
+const groups = buildGroups();
+
 const config = {
   discordToken: required('DISCORD_TOKEN'),
   // Open Cloud API key — used for accept / acceptall / setrank / roles.
+  // Must be scoped to EVERY managed group.
   robloxApiKey: required('ROBLOX_API_KEY'),
   // Optional .ROBLOSECURITY cookie — only needed for .exile / .ban, which
-  // Open Cloud has no endpoint for. Leave unset until you want those.
+  // Open Cloud has no endpoint for. The account must be in every managed group.
   robloxCookie: (process.env.ROBLOX_COOKIE || '').trim(),
-  groupId: parseInt(process.env.GROUP_ID || '981953580', 10),
-  prefix: process.env.PREFIX || '.',
+  // Managed groups (prefix -> groupId). config.groupId/prefix are the first.
+  groups,
+  groupId: groups[0].groupId,
+  prefix: groups[0].prefix,
   // Discord role IDs (comma separated) allowed to run commands.
   // Server admins / Manage Server always allowed regardless of this list.
   staffRoleIds: (process.env.STAFF_ROLE_IDS || '')

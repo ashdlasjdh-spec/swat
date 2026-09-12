@@ -1,6 +1,5 @@
 const { success, error, info } = require('../utils/embed');
 const { humanize } = require('../utils/errors');
-const roblox = require('../roblox');
 
 const CONCURRENCY = 4; // parallel accepts; 429s auto-retry in roblox.js
 
@@ -9,16 +8,16 @@ module.exports = {
   aliases: ['aa'],
   description: 'Accept every pending join request.',
   usage: 'acceptall',
-  async execute(message) {
+  async execute(message, args, { roblox, group }) {
     let statusMsg;
     try {
       const ids = await roblox.getAllJoinRequestIds();
       if (ids.length === 0) {
-        return message.reply({ embeds: [info('No Requests', 'There are no pending join requests.')] });
+        return message.reply({ embeds: [info('No Requests', `There are no pending join requests in **${group.name}**.`)] });
       }
 
       statusMsg = await message.reply({
-        embeds: [info('Processing', `Accepting **${ids.length}** join request(s)…`)],
+        embeds: [info('Processing', `Accepting **${ids.length}** join request(s) into **${group.name}**…`)],
       });
 
       // Bounded worker pool: CONCURRENCY workers drain a shared queue.
