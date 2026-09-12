@@ -35,7 +35,7 @@ const COOLDOWN_MS = 1500;
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`[discord] Logged in as ${client.user.tag}`);
   client.user.setActivity(`${config.prefix}help • Get swatted.gg`);
 });

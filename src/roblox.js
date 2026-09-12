@@ -21,10 +21,23 @@ let rolesCache = []; // [{ id, name, rank }] sorted by rank asc
 const idCache = new Map(); // username(lower) -> { id, ts }
 const ID_TTL = 10 * 60 * 1000;
 
-// Cookie-based ops (exile/ban) are loaded lazily so the bot runs API-key-only.
-let noblox = null;
+// Cookie-based ops (exile/ban) use direct HTTP with the raw cookie — no
+// noblox, so there's no flaky pre-flight validation. A browser-like
+// User-Agent is required or Roblox bot-flags the request.
 let cookieReady = false;
 let csrfToken = null;
+
+const web = COOKIE
+  ? axios.create({
+      timeout: 15000,
+      headers: {
+        Cookie: `.ROBLOSECURITY=${COOKIE}`,
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Content-Type': 'application/json',
+      },
+    })
+  : null;
 
 // ---------------------------------------------------------------------------
 // Init & auth
@@ -37,12 +50,13 @@ async function init() {
   let cookie = 'disabled (no ROBLOX_COOKIE — .exile/.ban off)';
   if (COOKIE) {
     try {
-      noblox = require('noblox.js');
-      await noblox.setCookie(COOKIE);
+      const { data: me } = await web.get('https://users.roblox.com/v1/users/authenticated');
       cookieReady = true;
-      cookie = 'enabled (.exile/.ban available)';
+      cookie = `enabled as ${me.name} (${me.id})`;
     } catch (err) {
-      cookie = `FAILED (${err.message}) — .exile/.ban off`;
+      const status = err.response?.status;
+      const detail = err.response?.data?.errors?.[0]?.message || err.message;
+      cookie = `FAILED (${status || ''} ${detail}) — .exile/.ban off`;
     }
   }
 
@@ -172,20 +186,10 @@ async function getAllJoinRequestIds() {
 // Exile / Ban — Open Cloud has NO endpoint for these, so they require the
 // optional .ROBLOSECURITY cookie. Without it, they return a clear message.
 // ---------------------------------------------------------------------------
-async function exile(userId) {
-  if (!cookieReady) {
-    throw new Error('Exile needs ROBLOX_COOKIE — Open Cloud API keys cannot remove members.');
-  }
-  return noblox.exile(GROUP_ID, userId);
-}
-
+// Obtain an X-CSRF-TOKEN: an unauthenticated-style POST returns it in a 403 header.
 async function fetchCsrf() {
   try {
-    await axios.post(
-      'https://auth.roblox.com/v2/logout',
-      {},
-      { headers: { Cookie: `.ROBLOSECURITY=${COOKIE}` } }
-    );
+    await web.post('https://auth.roblox.com/v2/logout', {});
     return null;
   } catch (err) {
     const token = err.response?.headers?.['x-csrf-token'];
@@ -194,35 +198,34 @@ async function fetchCsrf() {
   }
 }
 
-async function banRequest(userId, attempt) {
+// Generic cookie request with one automatic CSRF refresh + retry.
+async function cookieRequest(method, url, attempt = 0) {
   if (!csrfToken) csrfToken = await fetchCsrf();
   try {
-    const res = await axios.post(
-      `https://groups.roblox.com/v1/groups/${GROUP_ID}/bans/${userId}`,
-      {},
-      {
-        headers: {
-          Cookie: `.ROBLOSECURITY=${COOKIE}`,
-          'X-CSRF-TOKEN': csrfToken,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    const res = await web.request({ method, url, headers: { 'X-CSRF-TOKEN': csrfToken } });
     return res.data;
   } catch (err) {
     if (err.response?.status === 403 && err.response.headers['x-csrf-token'] && attempt < 2) {
       csrfToken = err.response.headers['x-csrf-token'];
-      return banRequest(userId, attempt + 1);
+      return cookieRequest(method, url, attempt + 1);
     }
     throw err;
   }
 }
 
-async function banUser(userId) {
-  if (!COOKIE) {
-    throw new Error('Ban needs ROBLOX_COOKIE — Open Cloud API keys cannot ban members.');
+async function exile(userId) {
+  if (!cookieReady) {
+    throw new Error('Exile needs a valid ROBLOX_COOKIE — Open Cloud API keys cannot remove members.');
   }
-  return banRequest(userId, 0);
+  // Classic "remove from group" endpoint.
+  return cookieRequest('delete', `https://groups.roblox.com/v1/groups/${GROUP_ID}/users/${userId}`);
+}
+
+async function banUser(userId) {
+  if (!cookieReady) {
+    throw new Error('Ban needs a valid ROBLOX_COOKIE — Open Cloud API keys cannot ban members.');
+  }
+  return cookieRequest('post', `https://groups.roblox.com/v1/groups/${GROUP_ID}/bans/${userId}`);
 }
 
 module.exports = {
