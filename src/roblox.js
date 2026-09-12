@@ -14,6 +14,23 @@ const cloud = axios.create({
   timeout: 15000,
 });
 
+// Auto-retry rate limits (429) and transient 5xx, honoring Retry-After.
+// Keeps .acceptall / .setrank resilient under load instead of failing.
+cloud.interceptors.response.use(undefined, async (err) => {
+  const cfg = err.config;
+  const status = err.response?.status;
+  if (!cfg || !(status === 429 || (status >= 500 && status < 600))) throw err;
+  cfg.__retry = (cfg.__retry || 0) + 1;
+  if (cfg.__retry > 3) throw err;
+  const retryAfter = Number(err.response?.headers?.['retry-after']);
+  const delay =
+    Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter * 1000
+      : 300 * 2 ** (cfg.__retry - 1); // 300 → 600 → 1200ms backoff
+  await new Promise((r) => setTimeout(r, delay));
+  return cloud.request(cfg);
+});
+
 // ---------------------------------------------------------------------------
 // Caches
 // ---------------------------------------------------------------------------
@@ -53,6 +70,8 @@ async function init() {
       const { data: me } = await web.get('https://users.roblox.com/v1/users/authenticated');
       cookieReady = true;
       cookie = `enabled as ${me.name} (${me.id})`;
+      // Pre-warm the CSRF token so the first .exile/.ban has no extra round-trip.
+      csrfToken = await fetchCsrf().catch(() => null);
     } catch (err) {
       const status = err.response?.status;
       const detail = err.response?.data?.errors?.[0]?.message || err.message;
@@ -127,8 +146,17 @@ async function resolveUserId(input) {
   );
   const user = data?.data?.[0];
   if (!user) throw new Error(`Roblox user "${raw}" not found`);
+  if (idCache.size > 500) pruneIdCache();
   idCache.set(key, { id: user.id, ts: Date.now() });
   return user.id;
+}
+
+// Drop expired entries so the cache can't grow without bound on long uptime.
+function pruneIdCache() {
+  const now = Date.now();
+  for (const [k, v] of idCache) {
+    if (now - v.ts >= ID_TTL) idCache.delete(k);
+  }
 }
 
 /** Fetch the membership resource for a user (or null if not a member). */
@@ -151,12 +179,20 @@ async function getRankInGroup(userId) {
 // Actions (Open Cloud)
 // ---------------------------------------------------------------------------
 async function setRank(userId, role) {
+  // One membership fetch does both the "is a member?" check and the update,
+  // instead of the command doing a separate getRankInGroup call first.
   const m = await getMembership(userId);
-  if (!m) throw new Error('User is not a member of the group');
+  if (!m) throw new Error('NOT_A_MEMBER');
+
+  // No-op if they're already at that rank — skip the PATCH entirely.
+  const currentRoleId = String(m.role || '').split('/').pop();
+  if (String(currentRoleId) === String(role.id)) return { changed: false };
+
   const membershipId = String(m.path || '').split('/').pop();
   await cloud.patch(`/groups/${GROUP_ID}/memberships/${membershipId}`, {
     role: `groups/${GROUP_ID}/roles/${role.id}`,
   });
+  return { changed: true };
 }
 
 async function acceptJoinRequest(userId) {

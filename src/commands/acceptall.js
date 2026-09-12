@@ -2,7 +2,7 @@ const { success, error, info } = require('../utils/embed');
 const { humanize } = require('../utils/errors');
 const roblox = require('../roblox');
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const CONCURRENCY = 4; // parallel accepts; 429s auto-retry in roblox.js
 
 module.exports = {
   name: 'acceptall',
@@ -21,17 +21,22 @@ module.exports = {
         embeds: [info('Processing', `Accepting **${ids.length}** join request(s)…`)],
       });
 
+      // Bounded worker pool: CONCURRENCY workers drain a shared queue.
       let ok = 0;
       let fail = 0;
-      for (const userId of ids) {
-        try {
-          await roblox.acceptJoinRequest(userId);
-          ok += 1;
-        } catch {
-          fail += 1;
+      let next = 0;
+      const worker = async () => {
+        while (next < ids.length) {
+          const userId = ids[next++];
+          try {
+            await roblox.acceptJoinRequest(userId);
+            ok += 1;
+          } catch {
+            fail += 1;
+          }
         }
-        await sleep(350); // rate-limit friendly
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
 
       return statusMsg.edit({
         embeds: [success('Accept All Complete', `✅ Accepted: **${ok}**\n❌ Failed: **${fail}**`)],

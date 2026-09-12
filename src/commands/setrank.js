@@ -31,16 +31,16 @@ module.exports = {
       }
 
       const userId = await roblox.resolveUserId(target);
-      const current = await roblox.getRankInGroup(userId);
-      if (current === 0) {
-        return message.reply({ embeds: [error('Not a member', `**${target}** is not in the group.`)] });
-      }
+      const { changed } = await roblox.setRank(userId, role);
 
-      await roblox.setRank(userId, role);
+      const note = changed ? '' : ' _(already at that rank)_';
       return message.reply({
-        embeds: [success('Rank Updated', `Set **${target}** (\`${userId}\`) to **${role.name}** (rank \`${role.rank}\`).`)],
+        embeds: [success('Rank Updated', `Set **${target}** (\`${userId}\`) to **${role.name}** (rank \`${role.rank}\`).${note}`)],
       });
     } catch (err) {
+      if (err.message === 'NOT_A_MEMBER') {
+        return message.reply({ embeds: [error('Not a member', `**${target}** is not in the group.`)] });
+      }
       return message.reply({ embeds: [error('Failed to set rank', humanize(err))] });
     }
   },

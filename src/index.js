@@ -87,6 +87,12 @@ client.on('messageCreate', async (message) => {
   // Keep the rank cache in sync with the group.
   setInterval(() => roblox.refreshRoles().catch(() => {}), config.roleRefreshInterval);
 
+  // Drop stale cooldown entries so the map can't grow without bound.
+  setInterval(() => {
+    const cutoff = Date.now() - COOLDOWN_MS;
+    for (const [id, ts] of cooldowns) if (ts < cutoff) cooldowns.delete(id);
+  }, 5 * 60 * 1000).unref();
+
   // Optional keepalive HTTP server (Railway sets PORT for web services).
   if (config.port) {
     http
