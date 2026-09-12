@@ -72,12 +72,13 @@ client.on('messageCreate', async (message) => {
 // ---------------------------------------------------------------------------
 (async () => {
   try {
-    const me = await roblox.init();
-    console.log(`[roblox] Authenticated as ${me.name} (${me.id})`);
-    console.log(`[roblox] Registered ${roblox.getRoles().length} ranks for group ${config.groupId}`);
+    const info = await roblox.init();
+    console.log(`[roblox] Open Cloud authenticated for group "${info.group}" (${config.groupId})`);
+    console.log(`[roblox] Registered ${roblox.getRoles().length} ranks`);
+    console.log(`[roblox] Cookie ops: ${info.cookie}`);
   } catch (err) {
-    console.error('[roblox] Authentication failed — check ROBLOX_COOKIE / GROUP_ID.');
-    console.error(err.message);
+    console.error('[roblox] Open Cloud auth failed — check ROBLOX_API_KEY / GROUP_ID and the key\'s group permissions.');
+    console.error(err.response?.data ? JSON.stringify(err.response.data) : err.message);
     process.exit(1);
   }
 

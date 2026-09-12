@@ -1,34 +1,75 @@
-const noblox = require('noblox.js');
 const axios = require('axios');
 const config = require('./config');
 
 const GROUP_ID = config.groupId;
-const COOKIE = config.robloxCookie;
+const API_KEY = config.robloxApiKey;
+const COOKIE = config.robloxCookie; // optional — only for exile/ban
 
 // ---------------------------------------------------------------------------
-// Caches (optimization: avoid re-hitting the Roblox API for stable data)
+// Open Cloud client (API key). Handles accept / acceptall / setrank / roles.
 // ---------------------------------------------------------------------------
-let rolesCache = []; // [{ id, name, rank, memberCount }] sorted by rank asc
-let csrfToken = null; // reused across ban requests
+const cloud = axios.create({
+  baseURL: 'https://apis.roblox.com/cloud/v2',
+  headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/json' },
+  timeout: 15000,
+});
+
+// ---------------------------------------------------------------------------
+// Caches
+// ---------------------------------------------------------------------------
+let rolesCache = []; // [{ id, name, rank }] sorted by rank asc
 const idCache = new Map(); // username(lower) -> { id, ts }
-const ID_TTL = 10 * 60 * 1000; // 10 minutes
+const ID_TTL = 10 * 60 * 1000;
+
+// Cookie-based ops (exile/ban) are loaded lazily so the bot runs API-key-only.
+let noblox = null;
+let cookieReady = false;
+let csrfToken = null;
 
 // ---------------------------------------------------------------------------
 // Init & auth
 // ---------------------------------------------------------------------------
 async function init() {
-  await noblox.setCookie(COOKIE);
-  const me = await noblox.getCurrentUser();
+  // Validate the API key by reading the group (needs group:read).
+  const { data } = await cloud.get(`/groups/${GROUP_ID}`);
   await refreshRoles();
-  return { id: me.id ?? me.UserID, name: me.name ?? me.UserName ?? 'account' };
+
+  let cookie = 'disabled (no ROBLOX_COOKIE — .exile/.ban off)';
+  if (COOKIE) {
+    try {
+      noblox = require('noblox.js');
+      await noblox.setCookie(COOKIE);
+      cookieReady = true;
+      cookie = 'enabled (.exile/.ban available)';
+    } catch (err) {
+      cookie = `FAILED (${err.message}) — .exile/.ban off`;
+    }
+  }
+
+  return { group: data.displayName || data.name || String(GROUP_ID), cookie };
 }
 
 // ---------------------------------------------------------------------------
-// Ranks / roles — registered from the group via the API at startup
+// Ranks / roles — from Open Cloud
 // ---------------------------------------------------------------------------
 async function refreshRoles() {
-  const roles = await noblox.getRoles(GROUP_ID);
-  rolesCache = [...roles].sort((a, b) => a.rank - b.rank);
+  const roles = [];
+  let pageToken = '';
+  do {
+    const { data } = await cloud.get(`/groups/${GROUP_ID}/roles`, {
+      params: { maxPageSize: 100, pageToken: pageToken || undefined },
+    });
+    for (const r of data.groupRoles || []) {
+      roles.push({
+        id: r.id ?? String(r.path || '').split('/').pop(),
+        name: r.displayName,
+        rank: r.rank,
+      });
+    }
+    pageToken = data.nextPageToken || '';
+  } while (pageToken);
+
+  rolesCache = roles.sort((a, b) => a.rank - b.rank);
   return rolesCache;
 }
 
@@ -36,10 +77,7 @@ function getRoles() {
   return rolesCache;
 }
 
-/**
- * Resolve a rank from a user query: either the rank number (e.g. "5" / "255")
- * or the rank name ("Member", "Admin", partial match allowed).
- */
+/** Resolve a rank by number ("255") or name ("Admin", partial match ok). */
 function findRole(query) {
   if (query == null) return null;
   const q = String(query).trim().toLowerCase();
@@ -68,55 +106,79 @@ async function resolveUserId(input) {
   const cached = idCache.get(key);
   if (cached && Date.now() - cached.ts < ID_TTL) return cached.id;
 
-  const id = await noblox.getIdFromUsername(raw);
-  if (!id) throw new Error(`Roblox user "${raw}" not found`);
-  idCache.set(key, { id, ts: Date.now() });
-  return id;
+  // Public username -> id endpoint (no auth needed).
+  const { data } = await axios.post(
+    'https://users.roblox.com/v1/usernames/users',
+    { usernames: [raw], excludeBannedUsers: false }
+  );
+  const user = data?.data?.[0];
+  if (!user) throw new Error(`Roblox user "${raw}" not found`);
+  idCache.set(key, { id: user.id, ts: Date.now() });
+  return user.id;
+}
+
+/** Fetch the membership resource for a user (or null if not a member). */
+async function getMembership(userId) {
+  const { data } = await cloud.get(`/groups/${GROUP_ID}/memberships`, {
+    params: { maxPageSize: 1, filter: `user == 'users/${userId}'` },
+  });
+  return (data.groupMemberships || [])[0] || null;
 }
 
 async function getRankInGroup(userId) {
-  return noblox.getRankInGroup(GROUP_ID, userId);
+  const m = await getMembership(userId);
+  if (!m) return 0;
+  const roleId = String(m.role || '').split('/').pop();
+  const role = rolesCache.find((r) => String(r.id) === String(roleId));
+  return role ? role.rank : 0;
 }
 
 // ---------------------------------------------------------------------------
-// Actions
+// Actions (Open Cloud)
 // ---------------------------------------------------------------------------
 async function setRank(userId, role) {
-  return noblox.setRank(GROUP_ID, userId, role.rank);
-}
-
-async function exile(userId) {
-  return noblox.exile(GROUP_ID, userId);
+  const m = await getMembership(userId);
+  if (!m) throw new Error('User is not a member of the group');
+  const membershipId = String(m.path || '').split('/').pop();
+  await cloud.patch(`/groups/${GROUP_ID}/memberships/${membershipId}`, {
+    role: `groups/${GROUP_ID}/roles/${role.id}`,
+  });
 }
 
 async function acceptJoinRequest(userId) {
-  return noblox.handleJoinRequest(GROUP_ID, userId, true);
+  // join_request_id is the user id.
+  await cloud.post(`/groups/${GROUP_ID}/join-requests/${userId}:accept`);
 }
 
-/**
- * Collect every pending join-request userId first (paginated), so we don't
- * invalidate the cursor while accepting.
- */
+/** Collect every pending join-request user id (paginated). */
 async function getAllJoinRequestIds() {
   const ids = [];
-  let cursor = null;
-
+  let pageToken = '';
   do {
-    const page = await noblox.getJoinRequests(GROUP_ID, 'Asc', 100, cursor);
-    const data = Array.isArray(page) ? page : page?.data || [];
-    for (const req of data) {
-      const uid = req?.requester?.userId ?? req?.requesterId ?? req?.userId;
-      if (uid) ids.push(uid);
+    const { data } = await cloud.get(`/groups/${GROUP_ID}/join-requests`, {
+      params: { maxPageSize: 100, pageToken: pageToken || undefined },
+    });
+    for (const jr of data.groupJoinRequests || []) {
+      const uid = String(jr.user || '').split('/').pop();
+      if (uid) ids.push(parseInt(uid, 10));
     }
-    cursor = Array.isArray(page) ? null : page?.nextPageCursor || null;
-  } while (cursor);
+    pageToken = data.nextPageToken || '';
+  } while (pageToken);
 
   return ids;
 }
 
 // ---------------------------------------------------------------------------
-// Group ban — Roblox native group ban endpoint (needs the ban feature + perms)
+// Exile / Ban — Open Cloud has NO endpoint for these, so they require the
+// optional .ROBLOSECURITY cookie. Without it, they return a clear message.
 // ---------------------------------------------------------------------------
+async function exile(userId) {
+  if (!cookieReady) {
+    throw new Error('Exile needs ROBLOX_COOKIE — Open Cloud API keys cannot remove members.');
+  }
+  return noblox.exile(GROUP_ID, userId);
+}
+
 async function fetchCsrf() {
   try {
     await axios.post(
@@ -148,12 +210,7 @@ async function banRequest(userId, attempt) {
     );
     return res.data;
   } catch (err) {
-    // CSRF token rotated — refresh once and retry.
-    if (
-      err.response?.status === 403 &&
-      err.response.headers['x-csrf-token'] &&
-      attempt < 2
-    ) {
+    if (err.response?.status === 403 && err.response.headers['x-csrf-token'] && attempt < 2) {
       csrfToken = err.response.headers['x-csrf-token'];
       return banRequest(userId, attempt + 1);
     }
@@ -162,6 +219,9 @@ async function banRequest(userId, attempt) {
 }
 
 async function banUser(userId) {
+  if (!COOKIE) {
+    throw new Error('Ban needs ROBLOX_COOKIE — Open Cloud API keys cannot ban members.');
+  }
   return banRequest(userId, 0);
 }
 

@@ -11,7 +11,11 @@ function required(name) {
 
 const config = {
   discordToken: required('DISCORD_TOKEN'),
-  robloxCookie: required('ROBLOX_COOKIE'),
+  // Open Cloud API key — used for accept / acceptall / setrank / roles.
+  robloxApiKey: required('ROBLOX_API_KEY'),
+  // Optional .ROBLOSECURITY cookie — only needed for .exile / .ban, which
+  // Open Cloud has no endpoint for. Leave unset until you want those.
+  robloxCookie: (process.env.ROBLOX_COOKIE || '').trim(),
   groupId: parseInt(process.env.GROUP_ID || '981953580', 10),
   prefix: process.env.PREFIX || '.',
   // Discord role IDs (comma separated) allowed to run commands.

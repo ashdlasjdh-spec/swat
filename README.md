@@ -162,7 +162,8 @@ role → *Copy ID*).
 | Variable         | Required | Default     | Description                                        |
 | ---------------- | -------- | ----------- | -------------------------------------------------- |
 | `DISCORD_TOKEN`  | ✅        | —           | Discord bot token                                  |
-| `ROBLOX_COOKIE`  | ✅        | —           | `.ROBLOSECURITY` cookie of the ranking account     |
+| `ROBLOX_API_KEY` | ✅        | —           | Open Cloud API key (`group:read`+`group:write`). Powers `.accept`/`.acceptall`/`.setrank` |
+| `ROBLOX_COOKIE`  | ❌        | *(empty)*   | `.ROBLOSECURITY` cookie. **Only** needed for `.exile`/`.ban` (Open Cloud has no endpoint for them) |
 | `GROUP_ID`       | ❌        | `981953580` | Roblox group ID                                    |
 | `PREFIX`         | ❌        | `.`         | Command prefix                                     |
 | `STAFF_ROLE_IDS` | ❌        | *(empty)*   | Discord role IDs allowed to use commands           |
