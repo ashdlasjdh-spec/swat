@@ -54,6 +54,12 @@ const config = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
+  // Discord user IDs that ALWAYS pass the permission gate, in every server,
+  // regardless of roles/permissions. Comma-separated; defaults include the owner.
+  whitelistUserIds: (process.env.WHITELIST_USER_IDS || '1434685900704583770')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   // .verify role swap (Discord). Defaults match the requested role IDs.
   verifiedRoleId: process.env.VERIFIED_ROLE_ID || '1521999556852711476',
   unverifiedRoleId: process.env.UNVERIFIED_ROLE_ID || '1522001263376597073',

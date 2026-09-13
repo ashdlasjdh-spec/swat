@@ -190,7 +190,9 @@ class Group {
     if (String(currentRoleId) === String(role.id)) return { changed: false };
 
     const membershipId = String(m.path || '').split('/').pop();
-    await cloud.patch(`/groups/${this.groupId}/memberships/${membershipId}`, {
+    // The PATCH memberships endpoint is deprecated and silently no-ops, so the
+    // rank never actually changed. :assignRole is the working replacement.
+    await cloud.post(`/groups/${this.groupId}/memberships/${membershipId}:assignRole`, {
       role: `groups/${this.groupId}/roles/${role.id}`,
     });
     return { changed: true };
