@@ -1,8 +1,34 @@
 const axios = require('axios');
+const https = require('https');
 const config = require('./config');
 
 const API_KEY = config.robloxApiKey;
 const COOKIE = config.robloxCookie; // optional — only for exile/ban
+
+// Reuse TLS connections across requests (big win for bulk .acceptall / ranking).
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, timeout: 30000 });
+
+// Auto-retry rate limits (429) and transient 5xx, honoring Retry-After.
+function attachRetry(instance) {
+  instance.interceptors.response.use(undefined, async (err) => {
+    const cfg = err.config;
+    const status = err.response?.status;
+    if (!cfg || !(status === 429 || (status >= 500 && status < 600))) throw err;
+    cfg.__retry = (cfg.__retry || 0) + 1;
+    if (cfg.__retry > 3) throw err;
+    const retryAfter = Number(err.response?.headers?.['retry-after']);
+    const delay =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 300 * 2 ** (cfg.__retry - 1); // 300 → 600 → 1200ms backoff
+    await new Promise((r) => setTimeout(r, delay));
+    return instance.request(cfg);
+  });
+}
+
+// Public Roblox calls (username -> id); no credentials attached.
+const pub = axios.create({ timeout: 15000, httpsAgent });
+attachRetry(pub);
 
 // ---------------------------------------------------------------------------
 // Shared Open Cloud client (one API key covers every managed group).
@@ -11,23 +37,11 @@ const cloud = axios.create({
   baseURL: 'https://apis.roblox.com/cloud/v2',
   headers: { 'x-api-key': API_KEY, 'Content-Type': 'application/json' },
   timeout: 15000,
+  httpsAgent,
+  maxRedirects: 0, // never forward the API key to a redirected host
 });
 
-// Auto-retry rate limits (429) and transient 5xx, honoring Retry-After.
-cloud.interceptors.response.use(undefined, async (err) => {
-  const cfg = err.config;
-  const status = err.response?.status;
-  if (!cfg || !(status === 429 || (status >= 500 && status < 600))) throw err;
-  cfg.__retry = (cfg.__retry || 0) + 1;
-  if (cfg.__retry > 3) throw err;
-  const retryAfter = Number(err.response?.headers?.['retry-after']);
-  const delay =
-    Number.isFinite(retryAfter) && retryAfter > 0
-      ? retryAfter * 1000
-      : 300 * 2 ** (cfg.__retry - 1); // 300 → 600 → 1200ms backoff
-  await new Promise((r) => setTimeout(r, delay));
-  return cloud.request(cfg);
-});
+attachRetry(cloud);
 
 // ---------------------------------------------------------------------------
 // Shared cookie client (same account ranks/exiles/bans in every group).
@@ -38,6 +52,10 @@ let csrfToken = null;
 const web = COOKIE
   ? axios.create({
       timeout: 15000,
+      httpsAgent,
+      // The cookie is the crown jewel: never follow a redirect that could
+      // forward it to another host.
+      maxRedirects: 0,
       // No default Content-Type: axios sets it only when a body is sent, so
       // body-less DELETEs don't get an application/json header + empty payload.
       headers: {
@@ -47,6 +65,8 @@ const web = COOKIE
       },
     })
   : null;
+
+if (web) attachRetry(web);
 
 async function fetchCsrf() {
   try {
@@ -99,7 +119,7 @@ async function resolveUserId(input) {
   const cached = idCache.get(key);
   if (cached && Date.now() - cached.ts < ID_TTL) return cached.id;
 
-  const { data } = await axios.post(
+  const { data } = await pub.post(
     'https://users.roblox.com/v1/usernames/users',
     { usernames: [raw], excludeBannedUsers: false }
   );

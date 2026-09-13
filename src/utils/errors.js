@@ -11,4 +11,24 @@ function humanize(err) {
   return `\`${msg}\``;
 }
 
-module.exports = { humanize };
+/**
+ * A compact, SECRET-FREE view of an error for logging. A raw axios error
+ * carries `config.headers` (Cookie + x-api-key) — never console.error(err)
+ * those directly; log sanitizeError(err) instead.
+ */
+function sanitizeError(err) {
+  if (!err || typeof err !== 'object') return err;
+  if (err.isAxiosError || err.config) {
+    return {
+      message: err.message,
+      method: err.config?.method,
+      // Path only — strip any query string that might carry identifiers.
+      url: String(err.config?.url || '').split('?')[0],
+      status: err.response?.status,
+      data: err.response?.data,
+    };
+  }
+  return { message: err.message, stack: err.stack };
+}
+
+module.exports = { humanize, sanitizeError };

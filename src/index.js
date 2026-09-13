@@ -7,6 +7,7 @@ const config = require('./config');
 const roblox = require('./roblox');
 const { isStaff } = require('./utils/permissions');
 const { error } = require('./utils/embed');
+const { sanitizeError } = require('./utils/errors');
 
 const client = new Client({
   intents: [
@@ -73,7 +74,7 @@ client.on('messageCreate', async (message) => {
       client,
     });
   } catch (err) {
-    console.error(`[command:${name}]`, err);
+    console.error(`[command:${name}]`, sanitizeError(err));
     message
       .reply({ embeds: [error('Error', 'Something went wrong executing that command.')] })
       .catch(() => {});
@@ -95,7 +96,7 @@ client.on('messageCreate', async (message) => {
     console.log(`[roblox] Cookie ops: ${cookie}`);
   } catch (err) {
     console.error('[roblox] Open Cloud auth failed — check ROBLOX_API_KEY and that the key is scoped to EVERY group.');
-    console.error(err.response?.data ? JSON.stringify(err.response.data) : err.message);
+    console.error(sanitizeError(err));
     process.exit(1);
   }
 
@@ -111,9 +112,14 @@ client.on('messageCreate', async (message) => {
   }, 5 * 60 * 1000).unref();
 
   // Optional keepalive HTTP server (Railway sets PORT for web services).
+  // Health check only — accepts GET/HEAD, echoes nothing, exposes no data.
   if (config.port) {
     http
       .createServer((req, res) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          res.writeHead(405).end();
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('OK');
       })
@@ -121,5 +127,5 @@ client.on('messageCreate', async (message) => {
   }
 })();
 
-process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
-process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', sanitizeError(err)));
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', sanitizeError(err)));
